@@ -3,6 +3,13 @@ __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+db.sqlite3
+*.sqlite3
+
 # Common ignores
 node_modules/
 .next/
