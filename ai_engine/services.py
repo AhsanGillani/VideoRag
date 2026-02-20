@@ -128,11 +128,17 @@ def vector_search(question_embedding: list, video_id: str, top_k: int = 3) -> li
         raise Exception(f'Vector search failed: {str(e)}')
 
 
-def format_timestamp(seconds: int) -> str:
-    """Convert seconds to MM:SS format."""
-    minutes = seconds // 60
-    secs = seconds % 60
-    return f'{minutes:02d}:{secs:02d}'
+def format_timestamp(seconds) -> str:
+    """Convert seconds to MM:SS format. Handles None, int, and float."""
+    if seconds is None:
+        return "00:00"
+    try:
+        seconds = float(seconds)
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f'{minutes:02d}:{secs:02d}'
+    except (ValueError, TypeError):
+        return "00:00"
 
 
 def build_context(chunks: list) -> str:
@@ -602,7 +608,7 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
             'answer': 'Hi! Ask me anything about this video and I will answer based on its content.',
             'sources': [],
             'cached': False,
-            'session_id': session_id,
+            'session_id': int(session_id) if session_id is not None else None,
             'message_id': None,
             'response_time_ms': int((time.time() - start_time) * 1000),
         }
@@ -620,11 +626,15 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
     if cached_response:
         # Fast path: return cached answer immediately
         total_time = time.time() - start_time
+        # Ensure sources is a list
+        cached_sources = cached_response.get('sources', [])
+        if not isinstance(cached_sources, list):
+            cached_sources = []
         return {
-            'answer': cached_response['answer'],
-            'sources': cached_response['sources'],
+            'answer': str(cached_response.get('answer', '')),
+            'sources': cached_sources,
             'cached': True,
-            'session_id': session_id,
+            'session_id': int(session_id) if session_id is not None else None,
             'message_id': None,
             'response_time_ms': int(total_time * 1000),
             'performance': {
@@ -662,23 +672,33 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
     total_time = time.time() - start_time
     print(f'[PERF-Pinecone] Embedding: {embedding_time:.2f}s, Cache: {cache_time:.2f}s, Search: {search_time:.2f}s, LLM: {llm_time:.2f}s, Total: {total_time:.2f}s')
     
-    # Format sources
-    sources = [
-        {
-            'text': chunk_data['text'],
-            'timestamp': format_timestamp(chunk_data['start_time']),
-            'start_time': chunk_data['start_time'],
-            'end_time': chunk_data['end_time'],
-            'score': chunk_data.get('score', 0),
-        }
-        for chunk_data in relevant_chunks_data
-    ]
+    # Format sources - ensure all values are JSON-serializable
+    sources = []
+    for chunk_data in relevant_chunks_data:
+        start_time = chunk_data.get('start_time', 0)
+        end_time = chunk_data.get('end_time', 0)
+        # Ensure numeric values
+        try:
+            start_time = float(start_time) if start_time is not None else 0.0
+            end_time = float(end_time) if end_time is not None else 0.0
+        except (ValueError, TypeError):
+            start_time = 0.0
+            end_time = 0.0
+        
+        sources.append({
+            'text': str(chunk_data.get('text', '')),
+            'timestamp': format_timestamp(start_time),
+            'start_time': start_time,
+            'end_time': end_time,
+            'score': float(chunk_data.get('score', 0)),
+        })
     
+    # Ensure all response values are JSON-serializable
     response = {
-        'answer': answer,
+        'answer': str(answer) if answer else '',
         'sources': sources,
         'cached': False,
-        'session_id': session_id,
+        'session_id': int(session_id) if session_id is not None else None,
         'message_id': None,
         'response_time_ms': int(total_time * 1000),
         'performance': {

@@ -197,6 +197,7 @@ class AskAIViewSet(viewsets.ViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         from .services import ask_ai_service_pinecone
+        import traceback
 
         try:
             response = ask_ai_service_pinecone(
@@ -205,9 +206,19 @@ class AskAIViewSet(viewsets.ViewSet):
                 question=serializer.validated_data['question'],
                 session_id=serializer.validated_data.get('session_id')
             )
-            return Response(response)
+            # Ensure response is JSON-serializable
+            if not isinstance(response, dict):
+                raise ValueError(f"Expected dict response, got {type(response)}")
+            # Validate required fields exist
+            if 'answer' not in response:
+                raise ValueError("Response missing 'answer' field")
+            return Response(response, status=status.HTTP_200_OK)
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in ask_pinecone: {str(e)}")
+            logger.error(traceback.format_exc())
             return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': str(e), 'traceback': traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
