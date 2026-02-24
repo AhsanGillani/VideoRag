@@ -71,12 +71,12 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Uses DB_* credentials from .env (Supabase connection).
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
         'NAME': os.getenv('DB_NAME', ''),
         'USER': os.getenv('DB_USER', ''),
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+        'PORT': '',
         # # Supabase requires SSL; adjust if running against local Postgres.
         # 'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'require')},
     }
