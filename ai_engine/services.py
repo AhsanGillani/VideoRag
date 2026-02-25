@@ -162,11 +162,14 @@ def get_llm_response(question: str, context: str) -> str:
     Get response from OpenAI GPT model using RAG context.
     Improved prompt to ensure LLM uses the provided context.
     """
-    # Stronger system prompt that explicitly requires using context
-    system = """You are a course assistant. Answer questions based ONLY on the provided context.
-- If the context contains the answer, provide it clearly.
-- If the context doesn't contain relevant information, say "The context does not specify this information."
-- Be concise (max 3 short paragraphs, under 120 words)."""
+    # System prompt: prefer context, but allow light general knowledge for generic questions
+    system = """You are a friendly course assistant.
+- First, TRY to answer using the provided context.
+- If the question is a generic greeting or small talk (e.g. "hi", "how are you", "is this helpful?"),
+  you may answer naturally from your own knowledge, even if the context does not mention it.
+- If the question is clearly about specific facts from the video and the context truly does not contain the answer,
+  say briefly that the context does not specify this information.
+- Always keep answers concise (max 3 short paragraphs, under 120 words)."""
 
     # Clear user prompt with explicit context section
     user_content = f"""Context from video transcript:
@@ -207,10 +210,13 @@ def get_llm_response_stream(question: str, context: str):
     Stream response from OpenAI GPT using RAG context.
     Yields text chunks as they arrive. Caller can collect for caching.
     """
-    system = """You are a course assistant. Answer questions based ONLY on the provided context.
-- If the context contains the answer, provide it clearly.
-- If the context doesn't contain relevant information, say "The context does not specify this information."
-- Be concise (max 3 short paragraphs, under 120 words)."""
+    system = """You are a friendly course assistant.
+- First, TRY to answer using the provided context.
+- If the question is a generic greeting or small talk (e.g. "hi", "how are you", "is this helpful?"),
+  you may answer naturally from your own knowledge, even if the context does not mention it.
+- If the question is clearly about specific facts from the video and the context truly does not contain the answer,
+  say briefly that the context does not specify this information.
+- Always keep answers concise (max 3 short paragraphs, under 120 words)."""
     user_content = f"""Context from video transcript:
 {context}
 
