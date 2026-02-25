@@ -327,7 +327,7 @@ def should_cache_answer(answer: str, sources: list, max_score: float | None = No
     if any(phrase in text for phrase in fallback_phrases):
         return False
 
-    if max_score is not None and max_score < 0.6:
+    if max_score is not None and max_score < 0.3:
         return False
 
     return True
