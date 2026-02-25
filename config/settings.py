@@ -19,7 +19,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-me-in-production')
 DEBUG = True
 
 ALLOWED_HOSTS = ['*']
-
+#testing CI/CD pipeline
 # Application definition
 INSTALLED_APPS = [
     'jazzmin',
