@@ -1,0 +1,23 @@
+name: VideoRag CI/CD Pipeline
+
+# Trigger this workflow every time code is pushed to the 'main' branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Execute deployment script over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # This single command triggers the bash script we created on the server
+          script: |
+            /home/ubuntu/deploy.sh
