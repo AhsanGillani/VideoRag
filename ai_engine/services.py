@@ -309,6 +309,30 @@ def check_cache(video_id: str, question: str, similarity_threshold: float = 0.90
     return None
 
 
+def should_cache_answer(answer: str, sources: list, max_score: float | None = None) -> bool:
+    """
+    Lightweight heuristic to decide if an answer is good enough to cache.
+    Avoids caching obviously low-quality or generic responses.
+    """
+    text = (answer or "").strip().lower()
+    if len(text) < 80:
+        return False
+
+    fallback_phrases = [
+        "the context does not specify this information",
+        "i'm not sure",
+        "i do not have enough information",
+        "i don't have enough information",
+    ]
+    if any(phrase in text for phrase in fallback_phrases):
+        return False
+
+    if max_score is not None and max_score < 0.6:
+        return False
+
+    return True
+
+
 def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -> dict:
     """
     Main service for Ask AI functionality.
@@ -393,6 +417,9 @@ def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -
     # Save to QuestionCache in background so next similar question is instant
     def _save_to_cache():
         try:
+            if not should_cache_answer(answer, sources):
+                return
+
             expires_at = datetime.now() + timedelta(days=30)
             cache_entry = QuestionCache.objects.create(
                 video_id=video_id,
@@ -680,6 +707,7 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
     
     # Format sources - ensure all values are JSON-serializable
     sources = []
+    max_score = 0.0
     for chunk_data in relevant_chunks_data:
         start_time = chunk_data.get('start_time', 0)
         end_time = chunk_data.get('end_time', 0)
@@ -691,12 +719,16 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
             start_time = 0.0
             end_time = 0.0
         
+        score = float(chunk_data.get('score', 0))
+        if score > max_score:
+            max_score = score
+
         sources.append({
             'text': str(chunk_data.get('text', '')),
             'timestamp': format_timestamp(start_time),
             'start_time': start_time,
             'end_time': end_time,
-            'score': float(chunk_data.get('score', 0)),
+            'score': score,
         })
     
     # Ensure all response values are JSON-serializable
@@ -719,6 +751,9 @@ def ask_ai_service_pinecone(user, video_id: str, question: str, session_id: int 
     # Save to cache in background (reuse question_embedding to avoid re-computing)
     def _save_to_cache():
         try:
+            if not should_cache_answer(answer, sources, max_score=max_score):
+                return
+
             # Convert Pinecone chunks to TranscriptChunk-like objects for cache storage
             # We need to create TranscriptChunk objects or store minimal data
             # For now, we'll store the answer and question embedding; sources can be reconstructed
