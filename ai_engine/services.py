@@ -211,9 +211,23 @@ def get_youtube_style_answer(question: str, sources: list[dict]) -> str:
     Uses segments with timestamps and durations to weave a narrative answer
     that references timestamps in parentheses, e.g. (0:05), (1:22), (3:47–5:34).
     """
+    # For speed, cap how much context we send to the model.
+    # Use at most ~24 segments, sampled across the video.
+    max_segments = 24
+    if len(sources) > max_segments:
+        step = max(1, len(sources) // max_segments)
+        sampled = []
+        idx = 0
+        while idx < len(sources) and len(sampled) < max_segments:
+            sampled.append(sources[idx])
+            idx += step
+        sources_for_llm = sampled
+    else:
+        sources_for_llm = sources
+
     # Build a timestamped transcript view for the model
     lines = []
-    for s in sources:
+    for s in sources_for_llm:
         ts_range = s.get('timestamp_range') or s.get('timestamp') or ''
         text = s.get('text', '')
         lines.append(f"[{ts_range}] {text}")
@@ -246,7 +260,7 @@ Write a detailed but concise answer in 2–4 paragraphs, in this style:
                 {'role': 'user', 'content': user_content}
             ],
             temperature=0.3,
-            max_tokens=300,
+            max_tokens=220,
             top_p=1.0,
             frequency_penalty=0.0,
             presence_penalty=0.0
