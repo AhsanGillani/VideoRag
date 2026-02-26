@@ -4,7 +4,7 @@ from .models import TranscriptChunk, QuestionCache
 
 @admin.register(TranscriptChunk)
 class TranscriptChunkAdmin(admin.ModelAdmin):
-    list_display = ('video_id', 'video_title', 'sequence_number', 'start_time', 'end_time', 'created_at')
+    list_display = ('video_id', 'video_title', 'sequence_number', 'start_time', 'duration', 'end_time', 'created_at')
     search_fields = ('video_id', 'video_title', 'text')
     list_filter = ('video_id', 'created_at')
     ordering = ('video_id', 'sequence_number')

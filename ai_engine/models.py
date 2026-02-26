@@ -11,6 +11,11 @@ class TranscriptChunk(models.Model):
     text = models.TextField()
     start_time = models.IntegerField(help_text='Start time in seconds')
     end_time = models.IntegerField(help_text='End time in seconds')
+    duration = models.FloatField(
+        null=True,
+        blank=True,
+        help_text='Duration in seconds (e.g. YouTube segment duration)'
+    )
     embedding = models.TextField(help_text='JSON list of 1536 floats from text-embedding-3-small')
     sequence_number = models.IntegerField(help_text='Order in the transcript')
     created_at = models.DateTimeField(auto_now_add=True)

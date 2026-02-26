@@ -5,6 +5,7 @@ from .models import TranscriptChunk, QuestionCache
 class TranscriptChunkSerializer(serializers.ModelSerializer):
     start_time_formatted = serializers.SerializerMethodField()
     end_time_formatted = serializers.SerializerMethodField()
+    duration = serializers.FloatField(required=False, allow_null=True)
 
     class Meta:
         model = TranscriptChunk
@@ -17,6 +18,7 @@ class TranscriptChunkSerializer(serializers.ModelSerializer):
             'start_time_formatted',
             'end_time',
             'end_time_formatted',
+            'duration',
             'sequence_number',
             'created_at',
         ]
@@ -76,3 +78,19 @@ class TranscriptIngestSerializer(serializers.Serializer):
     video_id = serializers.CharField(max_length=255)
     transcript = serializers.CharField()
     video_title = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class YouTubeSegmentSerializer(serializers.Serializer):
+    """One segment in YouTube-style transcript: text, start (seconds), duration (seconds)."""
+    text = serializers.CharField()
+    start = serializers.FloatField(min_value=0)
+    duration = serializers.FloatField(min_value=0)
+
+
+class YouTubeIngestSerializer(serializers.Serializer):
+    """
+    Ingest YouTube-style transcript: list of segments with start and duration.
+    """
+    video_id = serializers.CharField(max_length=255)
+    video_title = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    segments = YouTubeSegmentSerializer(many=True)

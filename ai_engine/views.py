@@ -11,6 +11,7 @@ from .serializers import (
     AskAIRequestSerializer,
     AskAIResponseSerializer,
     TranscriptIngestSerializer,
+    YouTubeIngestSerializer,
 )
 
 
@@ -86,6 +87,44 @@ class TranscriptChunkViewSet(viewsets.ReadOnlyModelViewSet):
             result = ingest_transcript_to_pinecone(
                 video_id=serializer.validated_data['video_id'],
                 transcript=serializer.validated_data['transcript'],
+                video_title=serializer.validated_data.get('video_title'),
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @extend_schema(
+        request=YouTubeIngestSerializer,
+        responses={'200': {'type': 'object'}},
+    )
+    @action(detail=False, methods=['post'], url_path='ingest_youtube')
+    def ingest_youtube(self, request):
+        """
+        Ingest YouTube-style transcript: segments with text, start, duration.
+        
+        Body:
+        {
+          "video_id": "my-video-id",
+          "video_title": "Optional title",
+          "segments": [
+            { "text": "First sentence.", "start": 0.0, "duration": 6.5 },
+            { "text": "Second sentence.", "start": 6.5, "duration": 8.2 }
+          ]
+        }
+        """
+        serializer = YouTubeIngestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services import ingest_transcript_youtube
+
+        try:
+            result = ingest_transcript_youtube(
+                video_id=serializer.validated_data['video_id'],
+                segments=serializer.validated_data['segments'],
                 video_title=serializer.validated_data.get('video_title'),
             )
             return Response(result, status=status.HTTP_200_OK)
@@ -221,4 +260,36 @@ class AskAIViewSet(viewsets.ViewSet):
             return Response(
                 {'error': str(e), 'traceback': traceback.format_exc()},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @extend_schema(
+        request=AskAIRequestSerializer,
+        responses={200: {'description': 'YouTube-style Ask AI: answer + sources with duration and timestamps'}},
+    )
+    @action(detail=False, methods=['post'], url_path='youtube')
+    def ask_youtube(self, request):
+        """
+        Ask AI (YouTube-style): same as /ask/ but sources include duration and
+        timestamp_range for clickable video timestamps.
+        
+        Body: { "video_id": "...", "question": "...", "session_id": 0 (optional) }
+        """
+        serializer = AskAIRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services import ask_ai_service_youtube
+
+        try:
+            response = ask_ai_service_youtube(
+                user=request.user,
+                video_id=serializer.validated_data['video_id'],
+                question=serializer.validated_data['question'],
+                session_id=serializer.validated_data.get('session_id'),
+            )
+            return Response(response, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )

@@ -205,6 +205,63 @@ Answer based on the context above:"""
         raise Exception(f'LLM request failed: {error_msg}')
 
 
+def get_youtube_style_answer(question: str, sources: list[dict]) -> str:
+    """
+    Generate a YouTube-style answer (like the official YouTube AI summaries).
+    Uses segments with timestamps and durations to weave a narrative answer
+    that references timestamps in parentheses, e.g. (0:05), (1:22), (3:47–5:34).
+    """
+    # Build a timestamped transcript view for the model
+    lines = []
+    for s in sources:
+        ts_range = s.get('timestamp_range') or s.get('timestamp') or ''
+        text = s.get('text', '')
+        lines.append(f"[{ts_range}] {text}")
+    context = "\n".join(lines)
+
+    system = """You are a YouTube-style video assistant for an "Ask about this video" panel.
+- You see transcript segments with timestamps like [00:00-00:06] before each line.
+- Your job is to write a clear, professional answer that feels like a human expert wrote it.
+- Always ground your answer in the transcript content and mention timestamps in parentheses
+  so viewers know where to jump in the video."""
+
+    user_content = f"""Transcript segments with timestamps:
+
+{context}
+
+User question: {question}
+
+Write a detailed but concise answer in 2–4 paragraphs, in this style:
+- First sentence: briefly state what the video is about and include the first key timestamp in parentheses, e.g. (0:00).
+- When you mention important tools, concepts, or steps, include timestamps in parentheses, e.g. (0:51), (1:22) or ranges like (3:47–5:34).
+- Do NOT dump the transcript. Synthesize and reorganize it into a smooth explanation.
+- Do NOT use bullet points; just paragraphs with inline timestamps.
+"""
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': user_content}
+            ],
+            temperature=0.3,
+            max_tokens=300,
+            top_p=1.0,
+            frequency_penalty=0.0,
+            presence_penalty=0.0
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        error_msg = str(e)
+        if 'Connection' in error_msg or 'timeout' in error_msg.lower():
+            raise Exception(
+                f'Failed to connect to OpenAI API: {error_msg}. '
+                'Check your internet connection and API key validity.'
+            )
+        raise Exception(f'LLM YouTube-style request failed: {error_msg}')
+
+
 def get_llm_response_stream(question: str, context: str):
     """
     Stream response from OpenAI GPT using RAG context.
@@ -307,6 +364,24 @@ def check_cache(video_id: str, question: str, similarity_threshold: float = 0.90
         print(f'[v0] Cache lookup error: {str(e)}')
     
     return None
+
+
+def is_summary_question(question: str) -> bool:
+    """Heuristic: detect if the user is asking for a summary/overview."""
+    q = (question or "").lower()
+    keywords = [
+        "summary",
+        "summarize",
+        "summarise",
+        "overview",
+        "summaries this video",
+        "summarize this video",
+        "summarise this video",
+        "please summarizes this video",
+        "what is this video about",
+        "what is this video mainly about",
+    ]
+    return any(k in q for k in keywords)
 
 
 def should_cache_answer(answer: str, sources: list, max_score: float | None = None) -> bool:
@@ -439,6 +514,118 @@ def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -
     return response
 
 
+def _source_with_duration(chunk) -> dict:
+    """Build source dict with duration and formatted timestamps (YouTube-style)."""
+    start = getattr(chunk, 'start_time', 0) or 0
+    end = getattr(chunk, 'end_time', 0) or 0
+    duration = getattr(chunk, 'duration', None)
+    if duration is None:
+        duration = end - start if end >= start else 0
+    return {
+        'text': chunk.text,
+        'timestamp': format_timestamp(start),
+        'timestamp_range': f'{format_timestamp(start)}-{format_timestamp(end)}',
+        'start_time': start,
+        'end_time': end,
+        'duration': round(duration, 2),
+    }
+
+
+def ask_ai_service_youtube(user, video_id: str, question: str, session_id: int = None) -> dict:
+    """
+    Ask AI for YouTube-style UI: same RAG as ask_ai_service but sources include
+    duration and formatted timestamps (timestamp, timestamp_range) for clickable links.
+    """
+    normalized_q = question.strip().lower()
+    while normalized_q and normalized_q[-1] in {'?', '!', '.', ','}:
+        normalized_q = normalized_q[:-1].strip()
+
+    if normalized_q in {'hi', 'hello', 'hey', 'hellow'}:
+        return {
+            'answer': 'Hi! Ask me anything about this video and I will answer based on its content.',
+            'sources': [],
+            'cached': False,
+            'session_id': session_id,
+            'message_id': None,
+        }
+
+    start_time = time.time()
+    question_embedding = generate_embedding(question)
+    cached_response = check_cache(video_id, question, question_embedding=question_embedding)
+    if cached_response:
+        # Cached sources may be dicts with or without duration; normalize to YouTube shape
+        sources = []
+        for s in cached_response.get('sources', []):
+            if isinstance(s, dict):
+                start = s.get('start_time', 0) or 0
+                end = s.get('end_time', 0) or 0
+                dur = s.get('duration')
+                if dur is None:
+                    dur = end - start if end >= start else 0
+                sources.append({
+                    'text': s.get('text', ''),
+                    'timestamp': format_timestamp(start),
+                    'timestamp_range': f'{format_timestamp(start)}-{format_timestamp(end)}',
+                    'start_time': start,
+                    'end_time': end,
+                    'duration': round(dur, 2),
+                })
+            else:
+                sources.append(s)
+        return {
+            'answer': cached_response['answer'],
+            'sources': sources,
+            'cached': True,
+            'session_id': session_id,
+            'message_id': None,
+        }
+
+    # For summary-style questions, use the full transcript for a richer answer.
+    if is_summary_question(question):
+        relevant_chunks = list(
+            TranscriptChunk.objects.filter(video_id=video_id).order_by('sequence_number')
+        )
+        if not relevant_chunks:
+            raise Exception('No transcript found for this video')
+        sources = [_source_with_duration(c) for c in relevant_chunks]
+        answer = get_youtube_style_answer(question, sources)
+    else:
+        # Normal Q&A: use vector search (top 2 chunks) for focused context,
+        # but still format the answer in YouTube style with inline timestamps.
+        relevant_chunks = vector_search(question_embedding, video_id, top_k=2)
+        if not relevant_chunks:
+            raise Exception('No relevant content found for this question')
+        sources = [_source_with_duration(c) for c in relevant_chunks]
+        answer = get_youtube_style_answer(question, sources)
+
+    response = {
+        'answer': answer,
+        'sources': sources,
+        'cached': False,
+        'session_id': session_id,
+        'message_id': None,
+    }
+
+    def _save_to_cache():
+        try:
+            if not should_cache_answer(answer, sources):
+                return
+            expires_at = datetime.now() + timedelta(days=30)
+            cache_entry = QuestionCache.objects.create(
+                video_id=video_id,
+                question=question,
+                question_embedding=json.dumps(question_embedding),
+                answer=answer,
+                expires_at=expires_at,
+            )
+            cache_entry.source_chunks.set(relevant_chunks)
+        except Exception as e:
+            print(f'[v0] Cache save error: {str(e)}')
+    threading.Thread(target=_save_to_cache, daemon=True).start()
+
+    return response
+
+
 def ask_ai_service_stream(user, video_id: str, question: str, session_id: int = None):
     """
     Generator for streaming Ask AI. Yields dicts for SSE:
@@ -522,6 +709,44 @@ def ingest_transcript(video_id: str, transcript: str, video_title: str | None = 
             embedding=json.dumps(embedding),
             sequence_number=i,
         )
+
+
+def ingest_transcript_youtube(video_id: str, segments: list, video_title: str | None = None) -> dict:
+    """
+    Ingest YouTube-style transcript: list of segments with text, start, duration.
+    Each segment becomes one chunk. Stores start_time, end_time, duration, and embedding.
+    
+    segments: [ {"text": "...", "start": 0.0, "duration": 6.5}, ... ]
+    
+    Returns:
+        dict with status, chunks_ingested, video_id, video_title
+    """
+    TranscriptChunk.objects.filter(video_id=video_id).delete()
+
+    for i, seg in enumerate(segments):
+        start = seg['start']
+        duration = seg['duration']
+        end = start + duration
+        start_time = int(round(start))
+        end_time = int(round(end))
+        embedding = generate_embedding(seg['text'])
+        TranscriptChunk.objects.create(
+            video_id=video_id,
+            video_title=video_title or '',
+            text=seg['text'],
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            embedding=json.dumps(embedding),
+            sequence_number=i,
+        )
+
+    return {
+        'status': 'ok',
+        'chunks_ingested': len(segments),
+        'video_id': video_id,
+        'video_title': video_title or '',
+    }
 
 
 # ========== Pinecone Vector Search Functions ==========
