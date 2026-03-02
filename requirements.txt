@@ -6,8 +6,7 @@ pgvector
 drf-spectacular
 redis==5.0.1
 celery==5.3.4
-openai==1.12.0
-httpx>=0.24.0,<0.28
+openai>=1.55.0
 python-dotenv==1.0.0
 django-cors-headers==4.3.1
 requests==2.31.0
@@ -15,4 +14,4 @@ gunicorn==21.2.0
 whitenoise==6.6.0
 pinecone>=3.0.0
 django-jazzmin==3.0.2
-google-generativeai
+google-genai

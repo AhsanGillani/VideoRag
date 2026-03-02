@@ -23,10 +23,11 @@ except ImportError:
 
 # Gemini client (optional alternative LLM for experimentation)
 try:
-    import google.generativeai as genai
+    from google import genai as genai_client
     _gemini_available = True
 except ImportError:
     _gemini_available = False
+    genai_client = None
 
 
 # Initialize OpenAI client lazily to ensure settings are loaded
@@ -42,24 +43,16 @@ def get_openai_client():
         )
     return get_openai_client._client
 
-# Initialize Gemini client lazily
-def get_gemini_model():
-    """Get Gemini GenerativeModel, creating it if needed."""
+# Initialize Gemini client lazily (uses new google-genai SDK)
+def get_gemini_client():
+    """Get Gemini Client from google-genai package."""
     if not _gemini_available:
-        raise Exception('google-generativeai package not installed. Run: pip install google-generativeai')
+        raise Exception('google-genai package not installed. Run: pip install google-genai')
     if not settings.GEMINI_API_KEY:
         raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file and restart the server.')
-    if not hasattr(get_gemini_model, '_model'):
-        # Configure Gemini client. Force v1 API endpoint so newer models
-        # like gemini-1.5-flash are available, avoiding v1beta-only 404s.
-        genai.configure(
-            api_key=settings.GEMINI_API_KEY,
-            client_options={"api_endpoint": "https://generativelanguage.googleapis.com/v1"}
-        )
-        # Default to a widely supported model; can be overridden via GEMINI_MODEL
-        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
-        get_gemini_model._model = genai.GenerativeModel(model_name)
-    return get_gemini_model._model
+    if not hasattr(get_gemini_client, '_client'):
+        get_gemini_client._client = genai_client.Client(api_key=settings.GEMINI_API_KEY)
+    return get_gemini_client._client
 # For backward compatibility, create client at module load
 try:
     openai_client = get_openai_client()
@@ -151,6 +144,34 @@ def vector_search(question_embedding: list, video_id: str, top_k: int = 3) -> li
         return [c for _, c in scored[:top_k]]
     except Exception as e:
         raise Exception(f'Vector search failed: {str(e)}')
+
+
+def text_search(question: str, video_id: str, top_k: int = 3) -> list:
+    """
+    Simple keyword-based search (no embeddings). Used by Gemini endpoint so it
+    does not require OPENAI_API_KEY. Scores chunks by word overlap with question.
+    """
+    try:
+        chunks = list(
+            TranscriptChunk.objects.filter(video_id=video_id).only(
+                'id', 'text', 'start_time', 'end_time'
+            )
+        )
+        if not chunks:
+            return []
+        q_words = set(question.lower().split())
+        q_words = {w.strip('.,?!') for w in q_words if len(w) > 1}
+        if not q_words:
+            return chunks[:top_k]
+        scored = []
+        for c in chunks:
+            c_words = set(c.text.lower().split())
+            overlap = len(q_words & c_words) / len(q_words) if q_words else 0
+            scored.append((overlap, c))
+        scored.sort(key=lambda x: -x[0])
+        return [c for _, c in scored[:top_k]]
+    except Exception as e:
+        raise Exception(f'Text search failed: {str(e)}')
 
 
 def format_timestamp(seconds) -> str:
@@ -251,9 +272,9 @@ Question: {question}
 Answer based on the context above:"""
 
     try:
-        model = get_gemini_model()
-        response = model.generate_content(prompt)
-        # google-generativeai returns .text for the combined response
+        client = get_gemini_client()
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+        response = client.models.generate_content(model=model_name, contents=prompt)
         return (response.text or '').strip()
     except Exception as e:
         error_msg = str(e)
@@ -573,9 +594,8 @@ def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -
 
 def ask_ai_service_gemini(user, video_id: str, question: str, session_id: int = None) -> dict:
     """
-    Ask AI service variant that uses Gemini as the LLM, but keeps the same
-    OpenAI embeddings + SQLite vector search pipeline.
-    This endpoint intentionally skips cache so you can compare raw LLM responses.
+    Ask AI service that uses ONLY Gemini (no OpenAI). Uses simple text search
+    instead of embeddings so GEMINI_API_KEY is the only required key.
     """
     normalized_q = question.strip().lower()
     while normalized_q and normalized_q[-1] in {'?', '!', '.', ','}:
@@ -590,12 +610,13 @@ def ask_ai_service_gemini(user, video_id: str, question: str, session_id: int = 
             'message_id': None,
         }
 
-    start_time = time.time()
-    question_embedding = generate_embedding(question)
+    if not settings.GEMINI_API_KEY:
+        raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file.')
 
-    # Vector search (same as default ask)
+    start_time = time.time()
+    # Text-based search (no embeddings) - Gemini endpoint does not use OpenAI
     search_start = time.time()
-    relevant_chunks = vector_search(question_embedding, video_id, top_k=2)
+    relevant_chunks = text_search(question, video_id, top_k=2)
     search_time = time.time() - search_start
 
     if not relevant_chunks:
