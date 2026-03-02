@@ -50,7 +50,13 @@ def get_gemini_model():
     if not settings.GEMINI_API_KEY:
         raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file and restart the server.')
     if not hasattr(get_gemini_model, '_model'):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
+        # Configure Gemini client. Force v1 API endpoint so newer models
+        # like gemini-1.5-flash are available, avoiding v1beta-only 404s.
+        genai.configure(
+            api_key=settings.GEMINI_API_KEY,
+            client_options={"api_endpoint": "https://generativelanguage.googleapis.com/v1"}
+        )
+        # Default to a widely supported model; can be overridden via GEMINI_MODEL
         model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
         get_gemini_model._model = genai.GenerativeModel(model_name)
     return get_gemini_model._model
