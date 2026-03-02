@@ -163,6 +163,10 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 OPENAI_EMBEDDING_MODEL = os.getenv('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
 
+# Gemini Configuration (set GEMINI_API_KEY in .env)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+
 # Pinecone Configuration (for vector search testing)
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '')
 PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'video-rag')

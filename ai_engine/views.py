@@ -179,6 +179,38 @@ class AskAIViewSet(viewsets.ViewSet):
 
     @extend_schema(
         request=AskAIRequestSerializer,
+        responses=AskAIResponseSerializer,
+    )
+    @action(detail=False, methods=['post'], url_path='gemini')
+    def ask_gemini(self, request):
+        """
+        Ask AI endpoint that uses Gemini as the LLM while keeping the same
+        embeddings + vector search pipeline. No cache is used so you can
+        compare raw Gemini vs OpenAI responses and latency.
+        """
+        serializer = AskAIRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services import ask_ai_service_gemini
+
+        try:
+            response = ask_ai_service_gemini(
+                user=request.user,
+                video_id=serializer.validated_data['video_id'],
+                question=serializer.validated_data['question'],
+                session_id=serializer.validated_data.get('session_id')
+            )
+            response_serializer = AskAIResponseSerializer(response)
+            return Response(response_serializer.data)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @extend_schema(
+        request=AskAIRequestSerializer,
         responses={200: {'description': 'SSE stream of events (meta, content, done)'}},
     )
     @action(detail=False, methods=['post'], url_path='ask_stream')

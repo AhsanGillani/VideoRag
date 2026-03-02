@@ -21,6 +21,13 @@ try:
 except ImportError:
     _pinecone_available = False
 
+# Gemini client (optional alternative LLM for experimentation)
+try:
+    import google.generativeai as genai
+    _gemini_available = True
+except ImportError:
+    _gemini_available = False
+
 
 # Initialize OpenAI client lazily to ensure settings are loaded
 def get_openai_client():
@@ -35,6 +42,18 @@ def get_openai_client():
         )
     return get_openai_client._client
 
+# Initialize Gemini client lazily
+def get_gemini_model():
+    """Get Gemini GenerativeModel, creating it if needed."""
+    if not _gemini_available:
+        raise Exception('google-generativeai package not installed. Run: pip install google-generativeai')
+    if not settings.GEMINI_API_KEY:
+        raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file and restart the server.')
+    if not hasattr(get_gemini_model, '_model'):
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+        get_gemini_model._model = genai.GenerativeModel(model_name)
+    return get_gemini_model._model
 # For backward compatibility, create client at module load
 try:
     openai_client = get_openai_client()
@@ -203,6 +222,38 @@ Answer based on the context above:"""
                 'Check your internet connection and API key validity. If you just created .env, restart the Django server.'
             )
         raise Exception(f'LLM request failed: {error_msg}')
+
+
+def get_llm_response_gemini(question: str, context: str) -> str:
+    """
+    Get response from Gemini model using RAG context.
+    Uses a single prompt string (system + context + question).
+    """
+    system = """You are a friendly course assistant.
+- First, TRY to answer using the provided context.
+- If the question is clearly about specific facts from the video and the context truly does not contain the answer,
+  say briefly that the context does not specify this information.
+- Always keep answers concise (max 3 short paragraphs, under 120 words)."""
+
+    prompt = f"""{system}
+
+Context from video transcript:
+{context}
+
+Question: {question}
+
+Answer based on the context above:"""
+
+    try:
+        model = get_gemini_model()
+        response = model.generate_content(prompt)
+        # google-generativeai returns .text for the combined response
+        return (response.text or '').strip()
+    except Exception as e:
+        error_msg = str(e)
+        if 'timeout' in error_msg.lower():
+            raise Exception(f'Gemini request timed out: {error_msg}')
+        raise Exception(f'Gemini request failed: {error_msg}')
 
 
 def get_youtube_style_answer(question: str, sources: list[dict]) -> str:
@@ -512,6 +563,65 @@ def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -
     threading.Thread(target=_save_to_cache, daemon=True).start()
 
     return response
+
+
+def ask_ai_service_gemini(user, video_id: str, question: str, session_id: int = None) -> dict:
+    """
+    Ask AI service variant that uses Gemini as the LLM, but keeps the same
+    OpenAI embeddings + SQLite vector search pipeline.
+    This endpoint intentionally skips cache so you can compare raw LLM responses.
+    """
+    normalized_q = question.strip().lower()
+    while normalized_q and normalized_q[-1] in {'?', '!', '.', ','}:
+        normalized_q = normalized_q[:-1].strip()
+
+    if normalized_q in {'hi', 'hello', 'hey', 'hellow'}:
+        return {
+            'answer': 'Hi! Ask me anything about this video and I will answer based on its content.',
+            'sources': [],
+            'cached': False,
+            'session_id': session_id,
+            'message_id': None,
+        }
+
+    start_time = time.time()
+    question_embedding = generate_embedding(question)
+
+    # Vector search (same as default ask)
+    search_start = time.time()
+    relevant_chunks = vector_search(question_embedding, video_id, top_k=2)
+    search_time = time.time() - search_start
+
+    if not relevant_chunks:
+        raise Exception('No relevant content found for this question')
+
+    context = build_context(relevant_chunks)
+
+    # Use Gemini instead of OpenAI for the answer
+    llm_start = time.time()
+    answer = get_llm_response_gemini(question, context)
+    llm_time = time.time() - llm_start
+
+    total_time = time.time() - start_time
+    print(f'[PERF-Gemini] Search: {search_time:.2f}s, LLM: {llm_time:.2f}s, Total: {total_time:.2f}s')
+
+    sources = [
+        {
+            'text': chunk.text,
+            'timestamp': format_timestamp(chunk.start_time),
+            'start_time': chunk.start_time,
+            'end_time': chunk.end_time
+        }
+        for chunk in relevant_chunks
+    ]
+
+    return {
+        'answer': answer,
+        'sources': sources,
+        'cached': False,
+        'session_id': session_id,
+        'message_id': None,
+    }
 
 
 def _source_with_duration(chunk) -> dict:
