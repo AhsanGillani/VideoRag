@@ -16,7 +16,14 @@ class TranscriptChunk(models.Model):
         blank=True,
         help_text='Duration in seconds (e.g. YouTube segment duration)'
     )
-    embedding = models.TextField(help_text='JSON list of 1536 floats from text-embedding-3-small')
+    embedding = models.TextField(help_text='JSON list of floats from embedding model')
+    embedding_provider = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="'openai' or 'gemini' - which model produced the embedding"
+    )
     sequence_number = models.IntegerField(help_text='Order in the transcript')
     created_at = models.DateTimeField(auto_now_add=True)
 

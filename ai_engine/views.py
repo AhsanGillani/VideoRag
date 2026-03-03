@@ -134,6 +134,45 @@ class TranscriptChunkViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @extend_schema(
+        request=YouTubeIngestSerializer,
+        responses={'200': {'type': 'object'}},
+    )
+    @action(detail=False, methods=['post'], url_path='ingest_youtube_gemini')
+    def ingest_youtube_gemini(self, request):
+        """
+        Ingest YouTube-style transcript using Gemini embeddings.
+        Same JSON format as ingest_youtube: segments with text, start, duration.
+        
+        Body:
+        {
+          "video_id": "my-video-id",
+          "video_title": "Optional title",
+          "segments": [
+            { "text": "First sentence.", "start": 0.0, "duration": 6.5 },
+            { "text": "Second sentence.", "start": 6.5, "duration": 8.2 }
+          ]
+        }
+        """
+        serializer = YouTubeIngestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services import ingest_transcript_youtube_gemini
+
+        try:
+            result = ingest_transcript_youtube_gemini(
+                video_id=serializer.validated_data['video_id'],
+                segments=serializer.validated_data['segments'],
+                video_title=serializer.validated_data.get('video_title'),
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class AskAIViewSet(viewsets.ViewSet):
     """Handles Ask AI requests with RAG capabilities."""

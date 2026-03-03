@@ -122,13 +122,44 @@ def generate_embedding(text: str) -> list:
             raise Exception(f'Failed to generate embedding: {error_msg}')
 
 
+def generate_embedding_gemini(text: str) -> list:
+    """
+    Generate embedding for given text using Gemini API.
+    Used for Gemini-only ingestion and vector search.
+    """
+    if not _gemini_available:
+        raise Exception('google-genai package not installed. Run: pip install google-genai')
+    if not settings.GEMINI_API_KEY:
+        raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file.')
+    client = get_gemini_client()
+    try:
+        result = client.models.embed_content(
+            model=getattr(settings, 'GEMINI_EMBEDDING_MODEL', 'text-embedding-004'),
+            contents=text,
+        )
+        emb = result.embeddings[0]
+        if hasattr(emb, 'values'):
+            return list(emb.values)
+        if isinstance(emb, dict):
+            return emb.get('values', emb)
+        return list(emb)
+    except Exception as e:
+        raise Exception(f'Failed to generate Gemini embedding: {str(e)}')
+
+
 def vector_search(question_embedding: list, video_id: str, top_k: int = 3) -> list:
     """
-    Perform vector similarity search (SQLite: load chunks, rank by cosine similarity in Python).
+    Perform vector similarity search (load chunks, rank by cosine similarity in Python).
+    Only searches chunks with OpenAI embeddings (embedding_provider null or 'openai').
     """
+    from django.db.models import Q
     try:
         chunks = list(
-            TranscriptChunk.objects.filter(video_id=video_id).only(
+            TranscriptChunk.objects.filter(
+                video_id=video_id
+            ).filter(
+                Q(embedding_provider__isnull=True) | Q(embedding_provider='openai')
+            ).only(
                 'id', 'text', 'start_time', 'end_time', 'embedding'
             )
         )
@@ -172,6 +203,33 @@ def text_search(question: str, video_id: str, top_k: int = 3) -> list:
         return [c for _, c in scored[:top_k]]
     except Exception as e:
         raise Exception(f'Text search failed: {str(e)}')
+
+
+def vector_search_gemini(question_embedding: list, video_id: str, top_k: int = 3) -> list:
+    """
+    Vector similarity search for chunks embedded with Gemini.
+    Only searches chunks with embedding_provider='gemini'.
+    """
+    try:
+        chunks = list(
+            TranscriptChunk.objects.filter(
+                video_id=video_id,
+                embedding_provider='gemini',
+            ).only(
+                'id', 'text', 'start_time', 'end_time', 'embedding'
+            )
+        )
+        if not chunks:
+            return []
+        scored = []
+        for c in chunks:
+            emb = json.loads(c.embedding) if isinstance(c.embedding, str) else c.embedding
+            sim = calculate_similarity(question_embedding, emb)
+            scored.append((sim, c))
+        scored.sort(key=lambda x: -x[0])
+        return [c for _, c in scored[:top_k]]
+    except Exception as e:
+        raise Exception(f'Gemini vector search failed: {str(e)}')
 
 
 def format_timestamp(seconds) -> str:
@@ -594,8 +652,9 @@ def ask_ai_service(user, video_id: str, question: str, session_id: int = None) -
 
 def ask_ai_service_gemini(user, video_id: str, question: str, session_id: int = None) -> dict:
     """
-    Ask AI service that uses ONLY Gemini (no OpenAI). Uses simple text search
-    instead of embeddings so GEMINI_API_KEY is the only required key.
+    Ask AI service that uses ONLY Gemini (no OpenAI).
+    Uses Gemini embeddings + vector_search_gemini for retrieval.
+    Requires chunks ingested via ingest_transcript_youtube_gemini.
     """
     normalized_q = question.strip().lower()
     while normalized_q and normalized_q[-1] in {'?', '!', '.', ','}:
@@ -614,9 +673,9 @@ def ask_ai_service_gemini(user, video_id: str, question: str, session_id: int = 
         raise Exception('GEMINI_API_KEY is not set in settings. Please set it in .env file.')
 
     start_time = time.time()
-    # Text-based search (no embeddings) - Gemini endpoint does not use OpenAI
+    question_embedding = generate_embedding_gemini(question)
     search_start = time.time()
-    relevant_chunks = text_search(question, video_id, top_k=2)
+    relevant_chunks = vector_search_gemini(question_embedding, video_id, top_k=2)
     search_time = time.time() - search_start
 
     if not relevant_chunks:
@@ -844,6 +903,7 @@ def ingest_transcript(video_id: str, transcript: str, video_title: str | None = 
             start_time=chunk['start_time'],
             end_time=chunk['end_time'],
             embedding=json.dumps(embedding),
+            embedding_provider='openai',
             sequence_number=i,
         )
 
@@ -875,6 +935,42 @@ def ingest_transcript_youtube(video_id: str, segments: list, video_title: str | 
             end_time=end_time,
             duration=duration,
             embedding=json.dumps(embedding),
+            embedding_provider='openai',
+            sequence_number=i,
+        )
+
+    return {
+        'status': 'ok',
+        'chunks_ingested': len(segments),
+        'video_id': video_id,
+        'video_title': video_title or '',
+    }
+
+
+def ingest_transcript_youtube_gemini(video_id: str, segments: list, video_title: str | None = None) -> dict:
+    """
+    Ingest YouTube-style transcript using Gemini embeddings.
+    Same JSON format as ingest_transcript_youtube: segments with text, start, duration.
+    Chunks are stored with embedding_provider='gemini' for vector_search_gemini.
+    """
+    TranscriptChunk.objects.filter(video_id=video_id, embedding_provider='gemini').delete()
+
+    for i, seg in enumerate(segments):
+        start = seg['start']
+        duration = seg['duration']
+        end = start + duration
+        start_time = int(round(start))
+        end_time = int(round(end))
+        embedding = generate_embedding_gemini(seg['text'])
+        TranscriptChunk.objects.create(
+            video_id=video_id,
+            video_title=video_title or '',
+            text=seg['text'],
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            embedding=json.dumps(embedding),
+            embedding_provider='gemini',
             sequence_number=i,
         )
 
