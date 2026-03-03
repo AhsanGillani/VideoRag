@@ -316,6 +316,8 @@ def get_llm_response_gemini(question: str, context: str) -> str:
     """
     system = """You are a friendly course assistant.
 - First, TRY to answer using the provided context.
+- If the question is a generic greeting or small talk (e.g. "hi", "how are you", "is this helpful?"),
+  you may answer naturally from your own knowledge, even if the context does not mention it.
 - If the question is clearly about specific facts from the video and the context truly does not contain the answer,
   say briefly that the context does not specify this information.
 - Always keep answers concise (max 3 short paragraphs, under 120 words)."""
@@ -331,7 +333,7 @@ Answer based on the context above:"""
 
     try:
         client = get_gemini_client()
-        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash')
         response = client.models.generate_content(model=model_name, contents=prompt)
         return (response.text or '').strip()
     except Exception as e:
