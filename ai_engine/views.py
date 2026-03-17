@@ -4,6 +4,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from rest_framework.parsers import BaseParser, JSONParser, FormParser, MultiPartParser
 from drf_spectacular.utils import extend_schema
 from .models import TranscriptChunk, QuestionCache
 from .serializers import (
@@ -15,12 +16,27 @@ from .serializers import (
 )
 
 
+class PlainTextParser(BaseParser):
+    """
+    Allows clients to POST raw transcript text (including newlines) without JSON escaping.
+    Use with Content-Type: text/plain
+    """
+    media_type = 'text/plain'
+
+    def parse(self, stream, media_type=None, parser_context=None):
+        data = stream.read()
+        if isinstance(data, bytes):
+            return data.decode('utf-8', errors='replace')
+        return str(data)
+
+
 class TranscriptChunkViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only endpoint for transcript chunks, plus an ingest endpoint for Bubble."""
     queryset = TranscriptChunk.objects.all()
     serializer_class = TranscriptChunkSerializer
     # Bubble calls this directly; no auth required.
     permission_classes = [AllowAny]
+    parser_classes = [JSONParser, FormParser, MultiPartParser, PlainTextParser]
 
     def get_queryset(self):
         """Filter chunks by external video_id if provided."""
@@ -45,7 +61,37 @@ class TranscriptChunkViewSet(viewsets.ReadOnlyModelViewSet):
           "transcript": "full transcript text",
           "video_title": "Optional title"
         }
+
+        Also supported (no JSON escaping needed):
+        - Content-Type: text/plain
+        - Body: raw transcript text (can contain newlines)
+        - Pass video_id via query param (?video_id=...) or header (X-Video-Id)
+        - Optional video_title via query param (?video_title=...) or header (X-Video-Title)
         """
+        # If user posts raw text (text/plain), request.data is a string, not a dict.
+        if isinstance(request.data, str):
+            transcript = request.data
+            video_id = (
+                request.query_params.get('video_id')
+                or request.headers.get('X-Video-Id')
+                or request.META.get('HTTP_X_VIDEO_ID')
+            )
+            video_title = (
+                request.query_params.get('video_title')
+                or request.headers.get('X-Video-Title')
+                or request.META.get('HTTP_X_VIDEO_TITLE')
+            )
+            if not video_id:
+                return Response(
+                    {'video_id': ['This field is required (use ?video_id=... or X-Video-Id header).']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            from .services import ingest_transcript
+
+            ingest_transcript(video_id=video_id, transcript=transcript, video_title=video_title)
+            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+
         serializer = TranscriptIngestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
