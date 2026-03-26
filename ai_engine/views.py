@@ -110,6 +110,68 @@ class TranscriptChunkViewSet(viewsets.ReadOnlyModelViewSet):
         request=TranscriptIngestSerializer,
         responses={'200': {'type': 'object'}},
     )
+    @action(detail=False, methods=['post'], url_path='ingest-gemini')
+    def ingest_gemini(self, request):
+        """
+        Ingest transcript for a video (Bubble-style) using Gemini embeddings.
+
+        Expected body:
+        {
+          "video_id": "bubble-video-id",
+          "transcript": "full transcript text",
+          "video_title": "Optional title"
+        }
+
+        Also supported (no JSON escaping needed):
+        - Content-Type: text/plain
+        - Body: raw transcript text (can contain newlines)
+        - Pass video_id via query param (?video_id=...) or header (X-Video-Id)
+        - Optional video_title via query param (?video_title=...) or header (X-Video-Title)
+        """
+        if isinstance(request.data, str):
+            transcript = request.data
+            video_id = (
+                request.query_params.get('video_id')
+                or request.headers.get('X-Video-Id')
+                or request.META.get('HTTP_X_VIDEO_ID')
+            )
+            video_title = (
+                request.query_params.get('video_title')
+                or request.headers.get('X-Video-Title')
+                or request.META.get('HTTP_X_VIDEO_TITLE')
+            )
+            if not video_id:
+                return Response(
+                    {'video_id': ['This field is required (use ?video_id=... or X-Video-Id header).']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            from .services import ingest_transcript_gemini
+
+            ingest_transcript_gemini(video_id=video_id, transcript=transcript, video_title=video_title)
+            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+
+        serializer = TranscriptIngestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services import ingest_transcript_gemini
+
+        ingest_transcript_gemini(
+            video_id=serializer.validated_data['video_id'],
+            transcript=serializer.validated_data['transcript'],
+            video_title=serializer.validated_data.get('video_title'),
+        )
+
+        return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        request=TranscriptIngestSerializer,
+        responses={'200': {'type': 'object'}},
+    )
+
+
+    
     @action(detail=False, methods=['post'], url_path='ingest_pinecone')
     def ingest_pinecone(self, request):
         """

@@ -910,6 +910,29 @@ def ingest_transcript(video_id: str, transcript: str, video_title: str | None = 
         )
 
 
+def ingest_transcript_gemini(video_id: str, transcript: str, video_title: str | None = None) -> None:
+    """
+    Ingest a full transcript for a given video_id using Gemini embeddings.
+    This splits the transcript into chunks, generates embeddings, and stores them.
+    """
+    TranscriptChunk.objects.filter(video_id=video_id, embedding_provider='gemini').delete()
+
+    chunks = split_transcript(transcript, chunk_size=300, chunk_overlap=50)
+
+    for i, chunk in enumerate(chunks):
+        embedding = generate_embedding_gemini(chunk['text'])
+        TranscriptChunk.objects.create(
+            video_id=video_id,
+            video_title=video_title or '',
+            text=chunk['text'],
+            start_time=chunk['start_time'],
+            end_time=chunk['end_time'],
+            embedding=json.dumps(embedding),
+            embedding_provider='gemini',
+            sequence_number=i,
+        )
+
+
 def ingest_transcript_youtube(video_id: str, segments: list, video_title: str | None = None) -> dict:
     """
     Ingest YouTube-style transcript: list of segments with text, start, duration.
